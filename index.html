@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Manga Chapter Viewer (Content-Agnostic)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0 auto;
+      max-width: 1100px;
+      background: #111;
+      color: #eee;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      line-height: 1.5;
+    }
+    header, footer {
+      /* Not sticky: visible only at top/bottom when scrolled there */
+      padding: 12px 16px;
+      border-bottom: 1px solid #222;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+      background: #111;
+    }
+    footer {
+      border-top: 1px solid #222;
+      border-bottom: none;
+      flex-direction: column;
+      gap: 10px;
+    }
+    h1 {
+      font-size: 1rem;
+      margin: 0;
+      font-weight: 600;
+      color: #ddd;
+    }
+    .muted { color: #9aa; }
+    #controlsTop, #controlsBottom {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-left: auto;
+    }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    button, input, select {
+      background: #222;
+      color: #eee;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 0.95rem;
+    }
+    button:hover { background: #2c2c2c; cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    input[type="number"] { width: 100px; }
+    input[type="url"] { width: min(80vw, 560px); }
+    #content { padding: 16px; }
+    img.manga-page {
+      display: block;
+      margin: 16px auto;
+      width: min(100%, 1000px);
+      height: auto;
+      background: #000;
+      border-radius: 6px;
+    }
+    .spinner {
+      margin: 24px auto;
+      width: 36px; height: 36px;
+      border: 3px solid #333; border-top-color: #9cf;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .divider { height: 1px; background: #222; width: 100%; }
+    .baseRow { width: 100%; display: flex; gap: 8px; align-items: baseline; }
+    code { word-break: break-all; }
+    .emptyState {
+      padding: 24px 16px;
+      color: #aab;
+      font-size: 0.95rem;
+    }
+  </style>
+</head>
+<body>
+  <!-- TOP controls (only visible at top) -->
+  <header>
+    <h1 id="title">Manga Viewer — No series loaded</h1>
+
+    <div id="controlsTop">
+      <!-- URL capture -->
+      <div class="row">
+        <label for="sampleUrl" class="muted">Sample page URL</label>
+        <input id="sampleUrl" type="url" placeholder="https://site/Series/1/1.webp" />
+        <button id="pasteBtn" title="Paste from clipboard">Paste</button>
+        <button id="useBtn" title="Use this URL to set base">Use</button>
+      </div>
+
+      <!-- Chapter navigation -->
+      <div class="row">
+        <label for="chapterInputTop" class="muted">Chapter</label>
+        <input id="chapterInputTop" type="number" min="1" step="1" value="1" />
+        <button id="goBtnTop" title="Jump to chapter">Go</button>
+      </div>
+      <div class="row">
+        <button id="prevBtnTop" title="Previous chapter (←)" disabled>Previous</button>
+        <button id="nextBtnTop" title="Next chapter (→)" disabled>Next</button>
+      </div>
+
+      <!-- Extension strategy -->
+      <div class="row">
+        <label for="extSelect" class="muted">Extensions</label>
+        <select id="extSelect" title="Try these file extensions in order">
+          <option>.webp,.jpg,.png</option>
+          <option>.webp</option>
+          <option>.jpg,.png</option>
+          <option>.png</option>
+        </select>
+      </div>
+    </div>
+  </header>
+
+  <div id="content">
+    <div class="emptyState" id="emptyState">
+      Paste a single page URL (e.g., <code>https://host/Series/1/1.webp</code>) and click <b>Use</b>.  
+      The viewer will auto-detect the series name, chapter, page, and extension and then load the rest of the chapter.  
+      Tip: Use ← / → arrow keys to switch chapters after one is loaded.
+    </div>
+  </div>
+
+  <!-- BOTTOM controls (only visible at bottom) -->
+  <footer>
+    <div id="controlsBottom" class="row" style="justify-content: flex-end; width: 100%;">
+      <div class="row">
+        <label for="chapterInputBottom" class="muted">Chapter</label>
+        <input id="chapterInputBottom" type="number" min="1" step="1" value="1" />
+        <button id="goBtnBottom" title="Jump to chapter">Go</button>
+      </div>
+      <div class="row">
+        <button id="prevBtnBottom" title="Previous chapter (←)" disabled>Previous</button>
+        <button id="nextBtnBottom" title="Next chapter (→)" disabled>Next</button>
+      </div>
+    </div>
+    <div class="divider"></div>
+    <!-- Base link preview at the VERY bottom -->
+    <div class="baseRow">
+      <span class="muted">Base:</span>
+      <code id="basePreview">(not set)</code>
+    </div>
+  </footer>
+
+  <script>
+    // ====== State ======
+    let state = {
+      baseOrigin: "",     // e.g., https://mangafirst.org
+      seriesName: "",     // raw (not encoded), e.g., "Catastrophic Necromancer"
+      currentChapter: 1,
+      orderExts: ["webp", "jpg", "png"],
+      loading: false,
+      initialized: false,
+    };
+
+    // ====== Elements ======
+    const titleEl = document.getElementById("title");
+    const contentEl = document.getElementById("content");
+    const emptyStateEl = document.getElementById("emptyState");
+    const basePreview = document.getElementById("basePreview");
+
+    const sampleUrlInput = document.getElementById("sampleUrl");
+    const pasteBtn = document.getElementById("pasteBtn");
+    const useBtn = document.getElementById("useBtn");
+
+    const prevBtnTop = document.getElementById("prevBtnTop");
+    const nextBtnTop = document.getElementById("nextBtnTop");
+    const goBtnTop   = document.getElementById("goBtnTop");
+    const chapterInputTop = document.getElementById("chapterInputTop");
+    const extSelect = document.getElementById("extSelect");
+
+    const prevBtnBottom = document.getElementById("prevBtnBottom");
+    const nextBtnBottom = document.getElementById("nextBtnBottom");
+    const goBtnBottom   = document.getElementById("goBtnBottom");
+    const chapterInputBottom = document.getElementById("chapterInputBottom");
+
+    // ====== Helpers ======
+    function setExtOrderFromSelect(preferredFirstExt = null) {
+      const dropdownList = extSelect.value.split(",").map(s => s.trim().replace(/^\./, ""));
+      if (preferredFirstExt) {
+        const set = new Set([preferredFirstExt, ...dropdownList]);
+        state.orderExts = Array.from(set); // ensure preferred is first
+      } else {
+        state.orderExts = dropdownList;
+      }
+    }
+
+    function seriesPath() {
+      if (!state.baseOrigin || !state.seriesName) return "";
+      return `${state.baseOrigin}/${encodeURIComponent(state.seriesName)}`;
+    }
+
+    function pageUrl(ch, page, ext) {
+      return `${seriesPath()}/${ch}/${page}.${ext}`;
+    }
+
+    function enableNav(enabled) {
+      prevBtnTop.disabled = !enabled;
+      nextBtnTop.disabled = !enabled;
+      prevBtnBottom.disabled = !enabled;
+      nextBtnBottom.disabled = !enabled;
+    }
+
+    function updateUIAfterInit() {
+      const base = seriesPath();
+      basePreview.textContent = base ? `${base}/${state.currentChapter}/<page>.{${state.orderExts.join(",")}}` : "(not set)";
+      const seriesLabel = state.seriesName ? ` — ${state.seriesName}` : "";
+      titleEl.textContent = `Manga Viewer${seriesLabel} — Chapter ${state.currentChapter}`;
+      chapterInputTop.value = String(state.currentChapter);
+      chapterInputBottom.value = String(state.currentChapter);
+    }
+
+    function clearContent() {
+      contentEl.innerHTML = "";
+    }
+
+    function addSpinner() {
+      const s = document.createElement("div");
+      s.className = "spinner";
+      s.id = "spinner";
+      contentEl.appendChild(s);
+    }
+
+    function removeSpinner() {
+      const s = document.getElementById("spinner");
+      if (s) s.remove();
+    }
+
+    function showEmptyState() {
+      if (!document.getElementById("emptyState")) {
+        const d = document.createElement("div");
+        d.className = "emptyState";
+        d.id = "emptyState";
+        d.innerHTML = `Paste a single page URL (e.g., <code>https://host/Series/1/1.webp</code>) and click <b>Use</b>.`;
+        contentEl.appendChild(d);
+      }
+    }
+
+    function hideEmptyState() {
+      const d = document.getElementById("emptyState");
+      if (d) d.remove();
+    }
+
+    // Parse a sample URL of the form: https://host/<Series>/<Chapter>/<Page>.<ext>
+    function parseSampleUrl(u) {
+      try {
+        const url = new URL(u);
+        const host = `${url.protocol}//${url.host}`;
+
+        // Split path segments, ignoring leading '/'
+        const segments = url.pathname.split("/").filter(Boolean);
+        // Expect at least: [Series, Chapter, Page.ext]
+        if (segments.length < 3) return null;
+
+        // Series may itself contain slashes on some sites; we assume last 2 are chapter and page.ext
+        const chapterSeg = segments[segments.length - 2];
+        const pageFile = segments[segments.length - 1];
+
+        const chapterNum = parseInt(chapterSeg, 10);
+        if (!Number.isFinite(chapterNum) || chapterNum < 1) return null;
+
+        const dot = pageFile.lastIndexOf(".");
+        if (dot <= 0) return null;
+        const pageNum = parseInt(pageFile.slice(0, dot), 10);
+        const ext = pageFile.slice(dot + 1).toLowerCase();
+
+        if (!Number.isFinite(pageNum) || pageNum < 1) return null;
+
+        const seriesParts = segments.slice(0, segments.length - 2);
+        const seriesNameDecoded = seriesParts.map(decodeURIComponent).join("/"); // keep nested if present
+
+        return {
+          baseOrigin: host,
+          seriesName: seriesNameDecoded,
+          chapter: chapterNum,
+          page: pageNum,
+          ext
+        };
+      } catch {
+        return null;
+      }
+    }
+
+    async function loadChapter(ch) {
+      if (!state.initialized || state.loading) return;
+      state.loading = true;
+      enableNav(false);
+
+      state.currentChapter = ch;
+      updateUIAfterInit();
+      clearContent();
+      hideEmptyState();
+      addSpinner();
+
+      const order = state.orderExts.slice(); // copy
+      let page = 1;
+      let misses = 0;
+      const maxConsecutiveMisses = 1;
+
+      function tryOnePageAllExts(pageNum) {
+        return new Promise((resolve) => {
+          let idx = 0;
+          function attempt() {
+            if (idx >= order.length) { resolve({ ok: false }); return; }
+            const ext = order[idx++];
+            const url = pageUrl(ch, pageNum, ext);
+            const img = new Image();
+            img.className = "manga-page";
+            img.alt = `Chapter ${ch}, Page ${pageNum}`;
+            img.onload = () => resolve({ ok: true, element: img });
+            img.onerror = attempt;
+            img.referrerPolicy = "no-referrer";
+            img.src = url;
+          }
+          attempt();
+        });
+      }
+
+      while (misses <= maxConsecutiveMisses) {
+        const res = await tryOnePageAllExts(page);
+        if (res.ok) {
+          contentEl.appendChild(res.element);
+          page += 1;
+          misses = 0;
+        } else {
+          misses += 1;
+          if (page === 1) break; // no pages for this chapter
+          break; // end of chapter
+        }
+      }
+
+      removeSpinner();
+
+      if (contentEl.children.length === 0) {
+        const msg = document.createElement("div");
+        msg.className = "emptyState";
+        msg.textContent = `No pages found for Chapter ${ch}. Either you reached the end, or the base/series is incorrect.`;
+        contentEl.appendChild(msg);
+      }
+
+      enableNav(true);
+      state.loading = false;
+    }
+
+    function goPrev() {
+      if (!state.initialized) return;
+      if (state.currentChapter > 1) loadChapter(state.currentChapter - 1);
+    }
+    function goNext() {
+      if (!state.initialized) return;
+      loadChapter(state.currentChapter + 1);
+    }
+    function goTo(n) {
+      if (!state.initialized) return;
+      if (Number.isFinite(n) && n >= 1) loadChapter(n);
+    }
+
+    // ====== Wire controls ======
+    pasteBtn.addEventListener("click", async () => {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text) sampleUrlInput.value = text.trim();
+        else alert("Clipboard is empty.");
+      } catch (e) {
+        alert("Clipboard read is not allowed in this context. Paste manually into the box.");
+      }
+    });
+
+    useBtn.addEventListener("click", () => {
+      const raw = sampleUrlInput.value.trim();
+      const parsed = parseSampleUrl(raw);
+      if (!parsed) {
+        alert("Could not parse that URL. Expected something like https://host/Series/1/1.webp");
+        return;
+      }
+
+      state.baseOrigin = parsed.baseOrigin;
+      state.seriesName = parsed.seriesName;
+      state.currentChapter = parsed.chapter;
+      setExtOrderFromSelect(parsed.ext); // prefer the ext we discovered
+      state.initialized = true;
+
+      updateUIAfterInit();
+      loadChapter(state.currentChapter);
+    });
+
+    // top chapter box
+    goBtnTop.addEventListener("click", () => goTo(parseInt(chapterInputTop.value, 10)));
+    chapterInputTop.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") goTo(parseInt(chapterInputTop.value, 10));
+    });
+
+    // bottom chapter box
+    goBtnBottom.addEventListener("click", () => goTo(parseInt(chapterInputBottom.value, 10)));
+    chapterInputBottom.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") goTo(parseInt(chapterInputBottom.value, 10));
+    });
+
+    // nav buttons
+    prevBtnTop.addEventListener("click", goPrev);
+    nextBtnTop.addEventListener("click", goNext);
+    prevBtnBottom.addEventListener("click", goPrev);
+    nextBtnBottom.addEventListener("click", goNext);
+
+    // dropdown change updates ext order (doesn't reload automatically)
+    extSelect.addEventListener("change", () => setExtOrderFromSelect(null));
+
+    // arrow keys (only when not typing in URL/chapter inputs)
+    window.addEventListener("keydown", (e) => {
+      const typing = [sampleUrlInput, chapterInputTop, chapterInputBottom].includes(e.target);
+      if (typing) return;
+      if (e.key === "ArrowLeft") goPrev();
+      else if (e.key === "ArrowRight") goNext();
+    });
+
+    // Initial UI
+    setExtOrderFromSelect(null);
+    updateUIAfterInit();
+    showEmptyState();
+  </script>
+</body>
+</html>
