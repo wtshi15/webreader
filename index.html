@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Manga Viewer — Interruptible (last-two-numbers parser)</title>
+  <title>Manga Viewer — Interruptible</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     :root { color-scheme: dark; }
@@ -66,8 +66,10 @@
     }
     .spinner {
       margin: 24px auto;
-      width: 36px; height: 36px;
-      border: 3px solid #333; border-top-color: #9cf;
+      width: 36px;
+      height: 36px;
+      border: 3px solid #333;
+      border-top-color: #9cf;
       border-radius: 50%;
       animation: spin 1s linear infinite;
     }
@@ -83,31 +85,28 @@
   </style>
 </head>
 <body>
-  <!-- TOP controls (visible only at top) -->
   <header>
     <h1 id="title">Manga Viewer — No series loaded</h1>
 
     <div id="controlsTop">
-      <!-- URL capture -->
       <div class="row">
         <label for="sampleUrl" class="muted">Sample page URL</label>
-        <input id="sampleUrl" type="url" placeholder="https://host/Series/57./1.jpg" />
+        <input id="sampleUrl" type="url" placeholder="https://cdn.arenascan.com/arena-bucket/251347/53/03.jpg" />
         <button id="pasteBtn" title="Paste from clipboard">Paste</button>
-        <button id="useBtn"   title="Use this URL (start at its chapter)">Use</button>
+        <button id="useBtn" title="Use this URL (start at its chapter)">Use</button>
       </div>
 
-      <!-- Chapter navigation -->
       <div class="row">
         <label for="chapterInputTop" class="muted">Chapter</label>
         <input id="chapterInputTop" type="number" min="1" step="1" value="1" />
-        <button id="goBtnTop"   title="Jump to chapter (uses URL textbox as base)">Go</button>
+        <button id="goBtnTop" title="Jump to chapter (uses URL textbox as base)">Go</button>
       </div>
+
       <div class="row">
         <button id="prevBtnTop" title="Previous chapter (←)">Previous</button>
         <button id="nextBtnTop" title="Next chapter (→)">Next</button>
       </div>
 
-      <!-- Extension strategy -->
       <div class="row">
         <label for="extSelect" class="muted">Extensions</label>
         <select id="extSelect" title="Try these file extensions in order">
@@ -123,13 +122,10 @@
 
   <div id="content">
     <div class="emptyState" id="emptyState">
-      Paste a single page URL — the viewer will treat the <b>last two numbers</b> in the path as
-      <i>chapter</i> (second-last) and <i>page</i> (last), even if they’re surrounded by punctuation (e.g., <code>57.</code>).
-      Click <b>Use</b> to initialize; you can interrupt loading any time with Previous/Next/Go.
+      Paste a single page URL and click <b>Use</b>.
     </div>
   </div>
 
-  <!-- BOTTOM controls (visible only at bottom) -->
   <footer>
     <div id="controlsBottom" class="row" style="justify-content: flex-end; width: 100%;">
       <div class="row">
@@ -137,13 +133,15 @@
         <input id="chapterInputBottom" type="number" min="1" step="1" value="1" />
         <button id="goBtnBottom" title="Jump to chapter (uses URL textbox as base)">Go</button>
       </div>
+
       <div class="row">
         <button id="prevBtnBottom" title="Previous chapter (←)">Previous</button>
         <button id="nextBtnBottom" title="Next chapter (→)">Next</button>
       </div>
     </div>
+
     <div class="divider"></div>
-    <!-- Base link preview at the VERY bottom -->
+
     <div class="baseRow">
       <span class="muted">Base:</span>
       <code id="basePreview">(not set)</code>
@@ -151,38 +149,41 @@
   </footer>
 
   <script>
-    // ====== State ======
     let state = {
-      origin: "",            // e.g., https://demoniclibs.com
-      templateNoExt: "",     // e.g., /Catastrophic%20Necromancer/{CH}/ {PG}  (without the .ext)
+      origin: "",
+      templateNoExt: "",
       currentChapter: 1,
       orderExts: ["webp", "jpg", "png"],
       initialized: false,
-      loadToken: 0,          // increments to cancel in-flight loads
+      loadToken: 0,
       seriesLabel: "Manga Viewer",
+
+      // dynamic padding info derived from the sample URL
+      chapterPadLength: 0,
+      pagePadLength: 0,
+      chapterShouldPad: false,
+      pageShouldPad: false,
     };
 
-    // ====== Elements ======
     const titleEl = document.getElementById("title");
     const contentEl = document.getElementById("content");
     const basePreview = document.getElementById("basePreview");
 
     const sampleUrlInput = document.getElementById("sampleUrl");
     const pasteBtn = document.getElementById("pasteBtn");
-    const useBtn   = document.getElementById("useBtn");
+    const useBtn = document.getElementById("useBtn");
 
     const prevBtnTop = document.getElementById("prevBtnTop");
     const nextBtnTop = document.getElementById("nextBtnTop");
-    const goBtnTop   = document.getElementById("goBtnTop");
+    const goBtnTop = document.getElementById("goBtnTop");
     const chapterInputTop = document.getElementById("chapterInputTop");
     const extSelect = document.getElementById("extSelect");
 
     const prevBtnBottom = document.getElementById("prevBtnBottom");
     const nextBtnBottom = document.getElementById("nextBtnBottom");
-    const goBtnBottom   = document.getElementById("goBtnBottom");
+    const goBtnBottom = document.getElementById("goBtnBottom");
     const chapterInputBottom = document.getElementById("chapterInputBottom");
 
-    // ====== Helpers ======
     function setExtOrderFromSelect(preferredFirstExt = null) {
       const dropdownList = extSelect.value.split(",").map(s => s.trim().replace(/^\./, ""));
       if (preferredFirstExt) {
@@ -193,12 +194,25 @@
       }
     }
 
+    function formatNumber(n, shouldPad, padLength) {
+      const s = String(n);
+      return shouldPad ? s.padStart(padLength, "0") : s;
+    }
+
+    function formatChapter(ch) {
+      return formatNumber(ch, state.chapterShouldPad, state.chapterPadLength);
+    }
+
+    function formatPage(pg) {
+      return formatNumber(pg, state.pageShouldPad, state.pagePadLength);
+    }
+
     function updateUI() {
       const preview = state.initialized
-        ? `${state.origin}${state.templateNoExt.replace("{CH}", String(state.currentChapter)).replace("{PG}", "<page>")}.{${state.orderExts.join(",")}}`
+        ? `${state.origin}${state.templateNoExt.replace("{CH}", formatChapter(state.currentChapter)).replace("{PG}", "<page>")}.{${state.orderExts.join(",")}}`
         : "(not set)";
-      basePreview.textContent = preview;
 
+      basePreview.textContent = preview;
       titleEl.textContent = `${state.seriesLabel} — Chapter ${state.currentChapter}`;
       chapterInputTop.value = String(state.currentChapter);
       chapterInputBottom.value = String(state.currentChapter);
@@ -223,86 +237,102 @@
     function showEmptyState(msg) {
       const d = document.createElement("div");
       d.className = "emptyState";
-      d.textContent = msg || `Paste a page URL and click Use.`;
+      d.textContent = msg || "Paste a page URL and click Use.";
       contentEl.appendChild(d);
     }
 
-    // Parse by taking the last two numeric runs in the path:
-    // second-last => chapter, last => page.
-    // Build a template (without extension) replacing them with {CH} and {PG}, preserving punctuation.
+    function replaceAt(str, start, length, replacement) {
+      return str.slice(0, start) + replacement + str.slice(start + length);
+    }
+
     function parseSampleUrlLastTwoNumbers(u) {
       try {
         const url = new URL(u);
         const origin = `${url.protocol}//${url.host}`;
+        const path = url.pathname;
 
-        // Path with percent-encoding preserved; we'll keep encoding in template
-        const path = url.pathname; // e.g., "/Catastrophic%20Necromancer/57./1.jpg"
-
-        // Find all numeric runs with indices
         const matches = [];
         const re = /\d+/g;
         let m;
         while ((m = re.exec(path)) !== null) {
-          matches.push({ num: m[0], index: m.index });
+          matches.push({
+            raw: m[0],
+            index: m.index,
+            length: m[0].length,
+          });
         }
+
         if (matches.length < 2) return null;
 
-        const pageMatch    = matches[matches.length - 1];
+        const pageMatch = matches[matches.length - 1];
         const chapterMatch = matches[matches.length - 2];
 
-        const chapter = parseInt(chapterMatch.num, 10);
-        const page    = parseInt(pageMatch.num, 10);
+        const chapter = parseInt(chapterMatch.raw, 10);
+        const page = parseInt(pageMatch.raw, 10);
+
         if (!Number.isFinite(chapter) || chapter < 1 || !Number.isFinite(page) || page < 1) {
           return null;
         }
 
-        // Determine extension from the last '.' (if any)
         const lastDot = path.lastIndexOf(".");
         let ext = "";
         let pathNoExt = path;
+
         if (lastDot > pageMatch.index) {
           ext = path.slice(lastDot + 1).toLowerCase();
           pathNoExt = path.slice(0, lastDot);
         }
 
-        // Build templateNoExt by replacing numeric runs at their indices.
-        // Replace the later one first to avoid shifting indices (page is later).
-        function replaceAt(str, start, length, replacement) {
-          return str.slice(0, start) + replacement + str.slice(start + length);
-        }
         let templateNoExt = pathNoExt;
-        templateNoExt = replaceAt(templateNoExt, pageMatch.index, pageMatch.num.length, "{PG}");
-        templateNoExt = replaceAt(templateNoExt, chapterMatch.index, chapterMatch.num.length, "{CH}");
+        templateNoExt = replaceAt(templateNoExt, pageMatch.index, pageMatch.length, "{PG}");
+        templateNoExt = replaceAt(templateNoExt, chapterMatch.index, chapterMatch.length, "{CH}");
 
-        // Nice label: try to infer series name (segment before the chapter digits)
-        // Take substring up to chapterMatch.index, split on '/', take last non-empty.
         let seriesLabel = "Manga Viewer";
         const preChapter = path.slice(0, chapterMatch.index);
         const parts = preChapter.split("/").filter(Boolean);
         if (parts.length) {
-          try { seriesLabel = decodeURIComponent(parts[parts.length - 1]); }
-          catch { /* keep default */ }
+          try {
+            seriesLabel = decodeURIComponent(parts[parts.length - 1]);
+          } catch {}
         }
 
-        return { origin, templateNoExt, chapter, page, ext, seriesLabel };
+        const chapterShouldPad = chapterMatch.raw.length > 1 && chapterMatch.raw.startsWith("0");
+        const pageShouldPad = pageMatch.raw.length > 1 && pageMatch.raw.startsWith("0");
+
+        return {
+          origin,
+          templateNoExt,
+          chapter,
+          page,
+          ext,
+          seriesLabel,
+          chapterPadLength: chapterMatch.raw.length,
+          pagePadLength: pageMatch.raw.length,
+          chapterShouldPad,
+          pageShouldPad,
+        };
       } catch {
         return null;
       }
     }
 
-    // Cancel current load
-    function cancelInProgressLoad() { state.loadToken += 1; }
+    function cancelInProgressLoad() {
+      state.loadToken += 1;
+    }
 
-    // Build a URL for given chapter/page/ext using the template
     function buildUrl(ch, pg, ext) {
-      const pathNoExt = state.templateNoExt.replace("{CH}", String(ch)).replace("{PG}", String(pg));
+      const chapterText = formatChapter(ch);
+      const pageText = formatPage(pg);
+      const pathNoExt = state.templateNoExt
+        .replace("{CH}", chapterText)
+        .replace("{PG}", pageText);
       return `${state.origin}${pathNoExt}.${ext}`;
     }
 
     async function loadChapter(ch) {
       if (!state.initialized) {
         clearContent();
-        showEmptyState(`Set a base via the URL textbox + Use.`);
+        showEmptyState("Set a base via the URL textbox + Use.");
         return;
       }
 
@@ -322,32 +352,54 @@
       function tryOnePageAllExts(pageNum, token) {
         return new Promise((resolve) => {
           let idx = 0;
+
           function attempt() {
-            if (token !== state.loadToken) { resolve({ ok: false, canceled: true }); return; }
-            if (idx >= order.length) { resolve({ ok: false }); return; }
+            if (token !== state.loadToken) {
+              resolve({ ok: false, canceled: true });
+              return;
+            }
+
+            if (idx >= order.length) {
+              resolve({ ok: false });
+              return;
+            }
+
             const ext = order[idx++];
             const url = buildUrl(ch, pageNum, ext);
+
             const img = new Image();
             img.className = "manga-page";
             img.alt = `Chapter ${ch}, Page ${pageNum}`;
+            img.referrerPolicy = "no-referrer";
+
             img.onload = () => {
-              if (token !== state.loadToken) { resolve({ ok: false, canceled: true }); return; }
+              if (token !== state.loadToken) {
+                resolve({ ok: false, canceled: true });
+                return;
+              }
               resolve({ ok: true, element: img });
             };
+
             img.onerror = () => {
-              if (token !== state.loadToken) { resolve({ ok: false, canceled: true }); return; }
+              if (token !== state.loadToken) {
+                resolve({ ok: false, canceled: true });
+                return;
+              }
               attempt();
             };
-            img.referrerPolicy = "no-referrer";
+
             img.src = url;
           }
+
           attempt();
         });
       }
 
       while (misses <= maxConsecutiveMisses) {
         if (myToken !== state.loadToken) break;
+
         const res = await tryOnePageAllExts(page, myToken);
+
         if (myToken !== state.loadToken) break;
 
         if (res.ok) {
@@ -358,12 +410,12 @@
           break;
         } else {
           misses += 1;
-          if (page === 1) break;
           break;
         }
       }
 
       if (myToken !== state.loadToken) return;
+
       removeSpinner();
 
       if (contentEl.children.length === 0) {
@@ -371,103 +423,127 @@
       }
     }
 
-    // Re-derive base from the textbox (without changing ext order unless preferredExt is provided)
-    function refreshBaseFromTextbox(preferredExt) {
+    function applyParsedBase(parsed, preferItsExtension = false) {
+      state.origin = parsed.origin;
+      state.templateNoExt = parsed.templateNoExt;
+      state.seriesLabel = parsed.seriesLabel || "Manga Viewer";
+
+      state.chapterPadLength = parsed.chapterPadLength;
+      state.pagePadLength = parsed.pagePadLength;
+      state.chapterShouldPad = parsed.chapterShouldPad;
+      state.pageShouldPad = parsed.pageShouldPad;
+
+      if (preferItsExtension) {
+        setExtOrderFromSelect(parsed.ext || null);
+      }
+    }
+
+    function refreshBaseFromTextbox(preferItsExtension = false) {
       const raw = (sampleUrlInput.value || "").trim();
       const parsed = parseSampleUrlLastTwoNumbers(raw);
       if (!parsed) return false;
 
-      state.origin       = parsed.origin;
-      state.templateNoExt= parsed.templateNoExt;
-      state.seriesLabel  = parsed.seriesLabel || "Manga Viewer";
-      if (preferredExt) setExtOrderFromSelect(parsed.ext || preferredExt);
+      applyParsedBase(parsed, preferItsExtension);
       return true;
     }
 
-    // ====== Wire controls ======
-    document.getElementById("pasteBtn").addEventListener("click", async () => {
+    pasteBtn.addEventListener("click", async () => {
       try {
         const text = await navigator.clipboard.readText();
-        if (text) sampleUrlInput.value = text.trim();
-        else alert("Clipboard is empty.");
+        if (text) {
+          sampleUrlInput.value = text.trim();
+        } else {
+          alert("Clipboard is empty.");
+        }
       } catch {
         alert("Clipboard read not allowed here. Paste manually.");
       }
     });
 
-    // Use: parse URL, prefer its extension, start from its chapter
-    document.getElementById("useBtn").addEventListener("click", () => {
+    useBtn.addEventListener("click", () => {
       const parsed = parseSampleUrlLastTwoNumbers((sampleUrlInput.value || "").trim());
       if (!parsed) {
-        alert("Could not parse that URL. It must contain at least two numbers (chapter, page).");
+        alert("Could not parse that URL. It must contain at least two numbers near the end for chapter and page.");
         return;
       }
-      state.origin        = parsed.origin;
-      state.templateNoExt = parsed.templateNoExt;
-      state.seriesLabel   = parsed.seriesLabel || "Manga Viewer";
-      setExtOrderFromSelect(parsed.ext || null);
-      state.initialized   = true;
-      state.currentChapter= parsed.chapter;
+
+      applyParsedBase(parsed, true);
+      state.initialized = true;
+      state.currentChapter = parsed.chapter;
 
       updateUI();
       loadChapter(parsed.chapter);
     });
 
-    // Go buttons: always re-parse from textbox (so you can switch series/host on the fly)
     function doGo(n) {
-      if (!refreshBaseFromTextbox(null)) {
+      if (!refreshBaseFromTextbox(false)) {
         alert("Invalid or missing sample URL. Paste a valid page URL first.");
         return;
       }
+
       state.initialized = true;
-      if (Number.isFinite(n) && n >= 1) loadChapter(n);
+
+      if (Number.isFinite(n) && n >= 1) {
+        loadChapter(n);
+      }
     }
-    document.getElementById("goBtnTop").addEventListener("click", () => {
+
+    goBtnTop.addEventListener("click", () => {
       const n = parseInt(chapterInputTop.value, 10);
       doGo(n);
     });
-    chapterInputTop.addEventListener("keydown", (e) => { if (e.key === "Enter") document.getElementById("goBtnTop").click(); });
 
-    document.getElementById("goBtnBottom").addEventListener("click", () => {
+    chapterInputTop.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") goBtnTop.click();
+    });
+
+    goBtnBottom.addEventListener("click", () => {
       const n = parseInt(chapterInputBottom.value, 10);
       doGo(n);
     });
-    chapterInputBottom.addEventListener("keydown", (e) => { if (e.key === "Enter") document.getElementById("goBtnBottom").click(); });
 
-    // Prev / Next never block; they cancel current load immediately
+    chapterInputBottom.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") goBtnBottom.click();
+    });
+
     function goPrev() {
-      if (!refreshBaseFromTextbox(null)) {
+      if (!refreshBaseFromTextbox(false)) {
         alert("Invalid or missing sample URL. Paste a valid page URL first.");
         return;
       }
+
       state.initialized = true;
-      if (state.currentChapter > 1) loadChapter(state.currentChapter - 1);
+
+      if (state.currentChapter > 1) {
+        loadChapter(state.currentChapter - 1);
+      }
     }
+
     function goNext() {
-      if (!refreshBaseFromTextbox(null)) {
+      if (!refreshBaseFromTextbox(false)) {
         alert("Invalid or missing sample URL. Paste a valid page URL first.");
         return;
       }
+
       state.initialized = true;
       loadChapter(state.currentChapter + 1);
     }
+
     prevBtnTop.addEventListener("click", goPrev);
     nextBtnTop.addEventListener("click", goNext);
     prevBtnBottom.addEventListener("click", goPrev);
     nextBtnBottom.addEventListener("click", goNext);
 
-    // Extension dropdown changes order (no auto-reload)
     extSelect.addEventListener("change", () => setExtOrderFromSelect(null));
 
-    // Arrow keys (ignore when typing in inputs)
     window.addEventListener("keydown", (e) => {
       const typing = [sampleUrlInput, chapterInputTop, chapterInputBottom].includes(e.target);
       if (typing) return;
-      if (e.key === "ArrowLeft")  goPrev();
+
+      if (e.key === "ArrowLeft") goPrev();
       if (e.key === "ArrowRight") goNext();
     });
 
-    // Initial UI
     setExtOrderFromSelect(null);
     updateUI();
   </script>
